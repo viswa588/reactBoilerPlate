@@ -1,90 +1,129 @@
 var webpack = require('webpack');
 var path = require('path');
-var CopyWebpackPlugin = require('copy-webpack-plugin');
-var ExtractTextPlugin = require('extract-text-webpack-plugin');
+
+// variables
+var isProduction = process.argv.indexOf('-p') >= 0;
+var sourcePath = path.join(__dirname, './src');
+var outPath = path.join(__dirname, './dist');
+
+// plugins
 var HtmlWebpackPlugin = require('html-webpack-plugin');
+var ExtractTextPlugin = require('extract-text-webpack-plugin');
+var WebpackCleanupPlugin = require('webpack-cleanup-plugin');
 
 module.exports = {
-  context: path.resolve('app'),
-  entry: [
-    'webpack-dev-server/client?http://0.0.0.0:9001',
-    'webpack/hot/only-dev-server',
-    './app'
-  ],
+  context: sourcePath,
+  entry: {
+    app: './main.tsx'
+  },
   output: {
-    path: path.resolve('/dist/'),
-    publicPath: '/public/assets/',
-    filename: 'bundle.js'
+    path: outPath,
+    filename: 'bundle.js',
+    chunkFilename: '[chunkhash].js',
+    publicPath: '/'
   },
-  devtool: 'source-map',
-  devServer: {
-    contentBase: 'public',
-    hot: true,
-    headers: { "Access-Control-Allow-Origin": "*" }
-  },
+  target: 'web',
   resolve: {
-    extensions: ['', '.webpack.js', '.web.js', '.ts', '.tsx', '.js', '.css', '.scss']
+    extensions: ['.js', '.ts', '.tsx'],
+    // Fix webpack's default behavior to not load packages with jsnext:main module
+    // (jsnext:main directs not usually distributable es6 format, but es6 sources)
+    mainFields: ['module', 'browser', 'main'],
+    alias: {
+      app: path.resolve(__dirname, 'src/app/')
+    }
   },
-  plugins: [
-    new ExtractTextPlugin("styles.css"),
-    new webpack.HotModuleReplacementPlugin(),
-    new webpack.BannerPlugin("************\nWelcome to Stormify\n***************"),
-    new CopyWebpackPlugin([
-      { from: './../node_modules/react/dist/react.js', to: 'lib/react.js' },
-      { from: './../node_modules/react-dom/dist/react-dom.js', to: 'lib/react-dom.js' }
-    ])
-  ],
   module: {
-    preloaders: [
+    rules: [
+      // .ts, .tsx
       {
-        test: /\.js$/,
-        loader: "source-map-loader"
-      }
-    ],
-    loaders: [
-      {
-        test: /\.tsx$/,
-        loader: 'ts-loader',
-        exclude: /node_modules\/typings\/public/
+        test: /\.tsx?$/,
+        use: isProduction
+          ? 'ts-loader'
+          : ['babel-loader?plugins=react-hot-loader/babel', 'ts-loader']
       },
+      // css
       {
         test: /\.css$/,
-        loader: ExtractTextPlugin.extract('style-loader', 'css-loader!autoprefixer-loader'),
-        exclude: /node_modules/
+        use: ExtractTextPlugin.extract({
+          fallback: 'style-loader',
+          use: [
+            {
+              loader: 'css-loader',
+              query: {
+                modules: true,
+                sourceMap: !isProduction,
+                importLoaders: 1,
+                localIdentName: '[local]__[hash:base64:5]'
+              }
+            },
+            {
+              loader: 'postcss-loader',
+              options: {
+                ident: 'postcss',
+                plugins: [
+                  require('postcss-import')({ addDependencyTo: webpack }),
+                  require('postcss-url')(),
+                  require('postcss-cssnext')(),
+                  require('postcss-reporter')(),
+                  require('postcss-browser-reporter')({
+                    disabled: isProduction
+                  })
+                ]
+              }
+            }
+          ]
+        })
       },
-      {
-        test: /\.scss$/,
-        loader: ExtractTextPlugin.extract('style-loader', 'css-loader!autoprefixer-loader!sass-loader'),
-        exclude: /node_modules/
-      },
-      {
-        test: /\.(jpe?g|png|gif)$/i,
-        loader: 'file?name=[name].[ext]'
-      },
-      {
-        test: /\.eot(\?v=\d+.\d+.\d+)?$/,
-        loader: 'file'
-      },
-      {
-        test: /\.woff(2)?(\?v=[0-9]\.[0-9]\.[0-9])?$/,
-        loader: "url-loader?limit=10000&mimetype=application/font-woff"
-      },
-      {
-        test: /\.ttf(\?v=\d+\.\d+\.\d+)?$/,
-        loader: 'url-loader?limit=10000&mimetype=application/octet-stream'
-      },
-      {
-        test: /\.svg(\?v=\d+\.\d+\.\d+)?$/,
-        loader: 'url?limit=10000&mimetype=image/svg+xml'
-      },
-      {
-        test: /\.ico$/,
-        loader: 'file?name=[name].[ext]'
-      }
+      // static assets
+      { test: /\.html$/, use: 'html-loader' },
+      { test: /\.(png|svg)$/, use: 'url-loader?limit=10000' },
+      { test: /\.(jpg|gif)$/, use: 'file-loader' }
     ]
   },
-  externals: {
-      "react": "React",
-      "react-dom": "ReactDOM"
+  optimization: {
+    splitChunks: {
+      name: true,
+      cacheGroups: {
+        commons: {
+          chunks: 'initial',
+          minChunks: 2
+        },
+        vendors: {
+          test: /[\\/]node_modules[\\/]/,
+          chunks: 'all',
+          priority: -10
+        }
+      }
+    },
+    runtimeChunk: true
+  },
+  plugins: [
+    new webpack.EnvironmentPlugin({
+      NODE_ENV: 'development', // use 'development' unless process.env.NODE_ENV is defined
+      DEBUG: false
+    }),
+    new WebpackCleanupPlugin(),
+    new ExtractTextPlugin({
+      filename: 'styles.css',
+      disable: !isProduction
+    }),
+    new HtmlWebpackPlugin({
+      template: 'assets/index.html'
+    })
+  ],
+  devServer: {
+    contentBase: sourcePath,
+    hot: true,
+    inline: true,
+    historyApiFallback: {
+      disableDotRule: true
+    },
+    stats: 'minimal'
+  },
+  node: {
+    // workaround for webpack-dev-server issue
+    // https://github.com/webpack/webpack-dev-server/issues/60#issuecomment-103411179
+    fs: 'empty',
+    net: 'empty'
   }
-}
+};
